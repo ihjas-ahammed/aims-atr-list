@@ -251,12 +251,12 @@ export function Results({ results }: ResultsProps) {
           ))}
         </div>
 
-        <div className="p-6 print:p-0 bg-gray-50/50 print:bg-transparent">
+        <div className="p-6 print:p-0 bg-gray-50/50 print:bg-transparent overflow-show">
           <div className="mb-6 print:hidden">
             <h2 className="text-xl font-bold text-gray-900">{currentResult.examName} - Top {currentResult.top20.length}</h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 print:gap-2 print-grid">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 print:gap-2 print-grid overflow-show">
             {currentResult.top20.map((student) => (
               <div 
                 key={student.canonicalName}
@@ -266,7 +266,7 @@ export function Results({ results }: ResultsProps) {
                 )}
               >
                 <div className={cn(
-                  "absolute -top-3 -left-3 print:-top-2 print:-left-2 w-8 h-8 print:w-6 print:h-6 rounded-full flex items-center justify-center font-bold text-sm print:text-xs shadow-sm border-2 border-white",
+                  "absolute -top-1 -left-1  w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm print:text-xs shadow-sm border-2 border-white",
                   getRankBadge(student.rank)
                 )}>
                   {student.rank}
