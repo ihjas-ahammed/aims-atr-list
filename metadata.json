@@ -1,0 +1,5 @@
+{
+  "name": "AIMS PLUS Track Record",
+  "description": "Calculate and track student averages and rankings across multiple exams, with duplicate name resolution and hat-trick tracking.",
+  "requestFramePermissions": []
+}
