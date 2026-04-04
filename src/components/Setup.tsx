@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Upload, X, FileSpreadsheet, Settings } from 'lucide-react';
 import { ExamFile, SubjectType } from '../types';
 import { cn } from '../lib/utils';
+import { getExams, saveExams } from '../lib/db';
 
 interface SetupProps {
   onProcess: (exams: ExamFile[], rightMarks: number, wrongMarks: number) => void;
@@ -11,6 +12,32 @@ export function Setup({ onProcess }: SetupProps) {
   const [exams, setExams] = useState<ExamFile[]>([]);
   const [rightMarks, setRightMarks] = useState<number>(4);
   const [wrongMarks, setWrongMarks] = useState<number>(1);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadSavedExams = async () => {
+      try {
+        const savedExams = await getExams();
+        if (savedExams && savedExams.length > 0) {
+          setExams(savedExams);
+        }
+      } catch (error) {
+        console.error("Failed to load saved exams:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadSavedExams();
+  }, []);
+
+  const updateExamsAndSave = async (newExams: ExamFile[]) => {
+    setExams(newExams);
+    try {
+      await saveExams(newExams);
+    } catch (error) {
+      console.error("Failed to save exams:", error);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -20,17 +47,17 @@ export function Setup({ onProcess }: SetupProps) {
         name: file.name,
         subject: 'General' as SubjectType,
       }));
-      setExams((prev) => [...prev, ...newFiles]);
+      updateExamsAndSave([...exams, ...newFiles]);
     }
   };
 
   const removeExam = (id: string) => {
-    setExams((prev) => prev.filter((e) => e.id !== id));
+    updateExamsAndSave(exams.filter((e) => e.id !== id));
   };
 
   const updateSubject = (id: string, subject: SubjectType) => {
-    setExams((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, subject } : e))
+    updateExamsAndSave(
+      exams.map((e) => (e.id === id ? { ...e, subject } : e))
     );
   };
 
@@ -45,8 +72,16 @@ export function Setup({ onProcess }: SetupProps) {
     const newExams = [...exams];
     const swapIndex = direction === 'up' ? index - 1 : index + 1;
     [newExams[index], newExams[swapIndex]] = [newExams[swapIndex], newExams[index]];
-    setExams(newExams);
+    updateExamsAndSave(newExams);
   };
+
+  if (isLoading) {
+    return (
+      <div className="max-w-4xl mx-auto p-6 flex justify-center items-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-8">
