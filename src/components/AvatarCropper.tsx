@@ -1,19 +1,30 @@
 import React, { useState, useCallback } from 'react';
 import Cropper from 'react-easy-crop';
-import { X, Check, Upload } from 'lucide-react';
+import { X, Check, Upload, Trash2 } from 'lucide-react';
 
 interface AvatarCropperProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (base64Image: string) => void;
+  onRemove: () => void;
   studentName: string;
+  hasAvatar: boolean;
 }
 
-export function AvatarCropper({ isOpen, onClose, onSave, studentName }: AvatarCropperProps) {
+export function AvatarCropper({ isOpen, onClose, onSave, onRemove, studentName, hasAvatar }: AvatarCropperProps) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+
+  // Reset state when opened
+  React.useEffect(() => {
+    if (isOpen) {
+      setImageSrc(null);
+      setZoom(1);
+      setCrop({ x: 0, y: 0 });
+    }
+  }, [isOpen]);
 
   const onCropComplete = useCallback((croppedArea: any, croppedAreaPixels: any) => {
     setCroppedAreaPixels(croppedAreaPixels);
@@ -80,6 +91,11 @@ export function AvatarCropper({ isOpen, onClose, onSave, studentName }: AvatarCr
     }
   };
 
+  const handleRemove = () => {
+    onRemove();
+    onClose();
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -133,16 +149,26 @@ export function AvatarCropper({ isOpen, onClose, onSave, studentName }: AvatarCr
         </div>
 
         <div className="p-4 border-t border-gray-100 flex justify-between gap-3 bg-gray-50">
-          {imageSrc ? (
-            <button
-              onClick={() => setImageSrc(null)}
-              className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg font-medium transition-colors text-sm"
-            >
-              Change Image
-            </button>
-          ) : (
-            <div></div>
-          )}
+          <div className="flex gap-2">
+            {imageSrc ? (
+              <button
+                onClick={() => setImageSrc(null)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-200 rounded-lg font-medium transition-colors text-sm"
+              >
+                Change Image
+              </button>
+            ) : hasAvatar ? (
+              <button
+                onClick={handleRemove}
+                className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors text-sm"
+              >
+                <Trash2 className="w-4 h-4" />
+                Remove Avatar
+              </button>
+            ) : (
+              <div></div>
+            )}
+          </div>
           <div className="flex gap-2">
             <button
               onClick={onClose}
@@ -156,7 +182,7 @@ export function AvatarCropper({ isOpen, onClose, onSave, studentName }: AvatarCr
               className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-300 transition-colors font-medium text-sm"
             >
               <Check className="w-4 h-4" />
-              Save Avatar
+              Save
             </button>
           </div>
         </div>

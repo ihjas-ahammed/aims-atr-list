@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { DayResult, Top20Entry } from '../types';
-import { Printer, Trophy, TrendingUp, TrendingDown, Minus, Award, Edit2, Check } from 'lucide-react';
+import { Printer, Trophy, TrendingUp, TrendingDown, Minus, Award, Edit2, Check, Settings2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { AvatarCropper } from './AvatarCropper';
-import { getAvatar, saveAvatar } from '../lib/db';
+import { getAvatar, saveAvatar, removeAvatar } from '../lib/db';
 
 interface ResultsProps {
   results: DayResult[];
@@ -19,9 +19,20 @@ export function Results({ results }: ResultsProps) {
   const [selectedStudent, setSelectedStudent] = useState('');
   const [avatars, setAvatars] = useState<Record<string, string>>({});
 
+  // Print settings
+  const [printColumns, setPrintColumns] = useState(4);
+  const [showDroppedInPrint, setShowDroppedInPrint] = useState(true);
+  const [showPrintSettings, setShowPrintSettings] = useState(false);
+
   useEffect(() => {
     const savedTitle = localStorage.getItem('aims_header_title');
     if (savedTitle) setHeaderTitle(savedTitle);
+    
+    const savedCols = localStorage.getItem('aims_print_cols');
+    if (savedCols) setPrintColumns(Number(savedCols));
+    
+    const savedShowDropped = localStorage.getItem('aims_print_dropped');
+    if (savedShowDropped !== null) setShowDroppedInPrint(savedShowDropped === 'true');
   }, []);
 
   useEffect(() => {
@@ -32,6 +43,12 @@ export function Results({ results }: ResultsProps) {
     const loadAvatars = async () => {
       const newAvatars: Record<string, string> = { ...avatars };
       for (const student of currentResult.top20) {
+        if (!newAvatars[student.canonicalName]) {
+          const img = await getAvatar(student.canonicalName);
+          if (img) newAvatars[student.canonicalName] = img;
+        }
+      }
+      for (const student of currentResult.removed) {
         if (!newAvatars[student.canonicalName]) {
           const img = await getAvatar(student.canonicalName);
           if (img) newAvatars[student.canonicalName] = img;
@@ -52,6 +69,16 @@ export function Results({ results }: ResultsProps) {
     setIsEditingTitle(false);
   };
 
+  const handlePrintColsChange = (cols: number) => {
+    setPrintColumns(cols);
+    localStorage.setItem('aims_print_cols', cols.toString());
+  };
+
+  const handleShowDroppedChange = (show: boolean) => {
+    setShowDroppedInPrint(show);
+    localStorage.setItem('aims_print_dropped', show.toString());
+  };
+
   const openCropper = (name: string) => {
     setSelectedStudent(name);
     setCropperOpen(true);
@@ -60,6 +87,15 @@ export function Results({ results }: ResultsProps) {
   const handleSaveAvatar = async (base64Image: string) => {
     await saveAvatar(selectedStudent, base64Image);
     setAvatars(prev => ({ ...prev, [selectedStudent]: base64Image }));
+  };
+
+  const handleRemoveAvatar = async () => {
+    await removeAvatar(selectedStudent);
+    setAvatars(prev => {
+      const newAvatars = { ...prev };
+      delete newAvatars[selectedStudent];
+      return newAvatars;
+    });
   };
 
   if (!results || results.length === 0) return null;
@@ -83,6 +119,19 @@ export function Results({ results }: ResultsProps) {
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
+      <style>{`
+        @media print {
+          .print-grid {
+            grid-template-columns: repeat(${printColumns}, minmax(0, 1fr)) !important;
+          }
+          ${!showDroppedInPrint ? `
+          .print-dropped-section {
+            display: none !important;
+          }
+          ` : ''}
+        }
+      `}</style>
+
       <div className="flex items-center justify-between print:hidden">
         <div className="flex items-center gap-3 group">
           {isEditingTitle ? (
@@ -111,13 +160,65 @@ export function Results({ results }: ResultsProps) {
             </>
           )}
         </div>
-        <button
-          onClick={handlePrint}
-          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium shadow-sm"
-        >
-          <Printer className="w-4 h-4" />
-          Print Report
-        </button>
+        
+        <div className="flex items-center gap-3 relative">
+          <button
+            onClick={() => setShowPrintSettings(!showPrintSettings)}
+            className={cn(
+              "p-2 rounded-lg transition-colors border",
+              showPrintSettings ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-white text-gray-500 border-gray-300 hover:bg-gray-50"
+            )}
+            title="Print Settings"
+          >
+            <Settings2 className="w-5 h-5" />
+          </button>
+          
+          {showPrintSettings && (
+            <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 p-4 z-50">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">Print Settings</h3>
+              
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700">Grid Columns</label>
+                  <div className="flex gap-2">
+                    {[2, 3, 4, 5].map(cols => (
+                      <button
+                        key={cols}
+                        onClick={() => handlePrintColsChange(cols)}
+                        className={cn(
+                          "flex-1 py-1.5 rounded-md text-sm font-medium transition-colors border",
+                          printColumns === cols 
+                            ? "bg-blue-600 text-white border-blue-600" 
+                            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                        )}
+                      >
+                        {cols}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showDroppedInPrint}
+                    onChange={(e) => handleShowDroppedChange(e.target.checked)}
+                    className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">Include Dropped List</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium shadow-sm"
+          >
+            <Printer className="w-4 h-4" />
+            Print Report
+          </button>
+        </div>
       </div>
 
       <div className="hidden print:block mb-8 text-center">
@@ -148,7 +249,7 @@ export function Results({ results }: ResultsProps) {
             <h2 className="text-xl font-bold text-gray-900">{currentResult.examName} - Top {currentResult.top20.length}</h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 print:gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 print:gap-4 print-grid">
             {currentResult.top20.map((student) => (
               <div 
                 key={student.canonicalName}
@@ -181,7 +282,7 @@ export function Results({ results }: ResultsProps) {
                       {student.canonicalName.charAt(0).toUpperCase()}
                     </div>
                   )}
-                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
                     <Edit2 className="w-6 h-6 text-white" />
                   </div>
                 </div>
@@ -223,7 +324,7 @@ export function Results({ results }: ResultsProps) {
           </div>
 
           {currentResult.removed.length > 0 && (
-            <div className="mt-12 pt-8 border-t border-gray-200">
+            <div className="mt-12 pt-8 border-t border-gray-200 print-dropped-section">
               <h3 className="text-sm font-bold text-red-600 uppercase tracking-wider mb-6 flex items-center gap-2">
                 <TrendingDown className="w-5 h-5" />
                 Dropped from List
@@ -231,7 +332,10 @@ export function Results({ results }: ResultsProps) {
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {currentResult.removed.map(student => (
                   <div key={student.canonicalName} className="flex flex-col items-center p-4 rounded-xl bg-red-50/50 border border-red-100">
-                    <div className="w-12 h-12 rounded-full mb-2 overflow-hidden border-2 border-white shadow-sm">
+                    <div 
+                      className="w-12 h-12 rounded-full mb-2 overflow-hidden border-2 border-white shadow-sm cursor-pointer relative group"
+                      onClick={() => openCropper(student.canonicalName)}
+                    >
                       {avatars[student.canonicalName] ? (
                         <img src={avatars[student.canonicalName]} alt={student.canonicalName} className="w-full h-full object-cover grayscale opacity-80" />
                       ) : (
@@ -239,6 +343,9 @@ export function Results({ results }: ResultsProps) {
                           {student.canonicalName.charAt(0).toUpperCase()}
                         </div>
                       )}
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity print:hidden">
+                        <Edit2 className="w-4 h-4 text-white" />
+                      </div>
                     </div>
                     <span className="font-medium text-gray-900 text-sm text-center line-clamp-1 w-full" title={student.canonicalName}>
                       {student.canonicalName}
@@ -258,7 +365,9 @@ export function Results({ results }: ResultsProps) {
         isOpen={cropperOpen}
         onClose={() => setCropperOpen(false)}
         onSave={handleSaveAvatar}
+        onRemove={handleRemoveAvatar}
         studentName={selectedStudent}
+        hasAvatar={!!avatars[selectedStudent]}
       />
     </div>
   );
