@@ -5,9 +5,11 @@ import { ManualMerge } from './components/ManualMerge';
 import { DuplicateResolver } from './components/DuplicateResolver';
 import { Results } from './components/Results';
 import { AISettings, defaultNameList } from './components/AISettings';
+import { AIConfirmation } from './components/AIConfirmation';
+import { AttendanceMatcher } from './components/AttendanceMatcher';
 import { ExamFile, SubjectType, RawRecord, ProcessedRecord, StudentState, DayResult, Top20Entry } from './types';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Settings } from 'lucide-react';
+import { Settings, Zap, FileText } from 'lucide-react';
 
 type Step = 'setup' | 'manual_merge' | 'resolve_duplicates' | 'results';
 
@@ -23,6 +25,10 @@ export default function App() {
   const [results, setResults] = useState<DayResult[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMatchingAI, setIsMatchingAI] = useState(false);
+  const [aiProposals, setAIProposals] = useState<Record<string, string> | null>(null);
+  const [isAIConfirmationOpen, setIsAIConfirmationOpen] = useState(false);
+  const [aiOfficialNames, setAIOfficialNames] = useState<string[]>([]);
+  const [isAttendanceMatcherOpen, setIsAttendanceMatcherOpen] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('aims_name_resolutions');
@@ -41,6 +47,77 @@ export default function App() {
       return `${parts[0]} ${parts[1]}`;
     }
     return parts[0];
+  };
+
+  const normalizeName = (name: string) =>
+    name
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9 ]+/g, '')
+      .replace(/\s+/g, ' ');
+
+  const getNameParts = (name: string) => normalizeName(name).split(' ').filter(Boolean);
+
+  const longestCommonSubstring = (a: string, b: string) => {
+    const n = a.length;
+    const m = b.length;
+    const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+    let best = 0;
+    for (let i = 1; i <= n; i += 1) {
+      for (let j = 1; j <= m; j += 1) {
+        if (a[i - 1] === b[j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+          best = Math.max(best, dp[i][j]);
+        }
+      }
+    }
+    return best;
+  };
+
+  const guessLogicMatch = (rawName: string, officialNames: string[]) => {
+    const rawNorm = normalizeName(rawName);
+    const rawParts = getNameParts(rawNorm);
+    if (rawParts.length === 0) return null;
+
+    const rawFirst = rawParts[0] || '';
+    const rawSecond = rawParts[1] || '';
+    const rawConcat = rawParts.join('');
+
+    let bestMatch: { name: string; score: number } | null = null;
+
+    for (const officialName of officialNames) {
+      const offNorm = normalizeName(officialName);
+      if (rawNorm === offNorm) continue;
+
+      const offParts = getNameParts(offNorm);
+      const offFirst = offParts[0] || '';
+      const offSecond = offParts[1] || '';
+      const offConcat = offParts.join('');
+
+      let score = 0;
+      if (rawSecond && offSecond && rawSecond === offSecond) score += 35;
+      if (rawFirst && offFirst && rawFirst === offFirst) score += 20;
+      if (rawFirst?.[0] && offFirst?.[0] && rawFirst[0] === offFirst[0]) score += 10;
+      if (rawSecond && offSecond && rawSecond[0] === offSecond[0]) score += 5;
+      if (rawFirst === offFirst && rawSecond && offSecond && rawSecond[0] === offSecond[0]) score += 15;
+      const lcs = longestCommonSubstring(rawConcat, offConcat);
+      if (lcs >= 4) score += lcs * 3;
+      if (offNorm.includes(rawNorm) || rawNorm.includes(offNorm)) score += 10;
+
+      if (!bestMatch || score > bestMatch.score || (score === bestMatch.score && offNorm.length < normalizeName(bestMatch.name).length)) {
+        bestMatch = { name: officialName, score };
+      }
+    }
+
+    return bestMatch && bestMatch.score >= 45 ? bestMatch.name : null;
+  };
+
+  const chunkArray = <T,>(items: T[], size: number): T[][] => {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+      chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
   };
 
   const handleProcess = async (selectedExams: ExamFile[], right: number, wrong: number) => {
@@ -127,6 +204,7 @@ export default function App() {
     const apiKey = localStorage.getItem('aims_ai_api_key');
     const modelName = localStorage.getItem('aims_ai_model') || 'gemini-3.1-flash-preview';
     const nameList = localStorage.getItem('aims_ai_name_list') || defaultNameList;
+    const batchSize = Math.max(1, parseInt(localStorage.getItem('aims_ai_batch_size') || '20', 10));
 
     if (!apiKey) {
       alert("Please configure AI settings first by clicking the settings icon in the header.");
@@ -134,44 +212,79 @@ export default function App() {
       return;
     }
 
+    if (rawNames.length === 0) {
+      alert('No raw names are available for AI matching. Process exam files first.');
+      return;
+    }
+
     setIsMatchingAI(true);
     try {
       const ai = new GoogleGenAI({ apiKey });
-      
-      const prompt = `
-      You are an expert at matching student names.
-      I have a master list of official student names:
-      ${nameList}
+      const officialNames = Array.from(
+        new Set([
+          ...nameList.split(',').map(name => name.trim()).filter(Boolean),
+          ...rawNames
+        ])
+      ).sort((a, b) => a.localeCompare(b));
 
-      I have a list of raw names extracted from exam sheets:
-      ${rawNames.join(', ')}
+      const batches = chunkArray(rawNames, batchSize);
+      const allChanged: Record<string, string> = {};
 
-      Your task is to map each raw name to the closest matching official name from the master list.
-      If a raw name doesn't match any official name reasonably well, map it to itself (the raw name).
-      Return a JSON object where keys are the raw names and values are the matched official names.
-      `;
+      for (const batch of batches) {
+        const currentResolutions = batch.map(rawName => {
+          const resolved = resolutions[rawName] || rawName;
+          return `${rawName}: ${resolved}`;
+        }).join('\n');
 
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            description: "A dictionary mapping raw names to official names.",
-            additionalProperties: {
-              type: Type.STRING
+        const prompt = `You are an expert at matching student names.
+I have a master list of official student names:
+${nameList}
+
+I have a batch of raw names extracted from exam sheets:
+${batch.join(', ')}
+
+Current resolved names for this batch are:
+${currentResolutions}
+
+For each raw name in this batch, choose the best matching canonical name from the master list.
+Only return a JSON object containing entries for raw names where the final canonical name should be different from the raw name.
+Do not include unchanged names.
+Return only valid JSON without extra text.`;
+
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              description: "A dictionary mapping only changed raw names to official names.",
+              additionalProperties: {
+                type: Type.STRING
+              }
             }
           }
-        }
-      });
+        });
 
-      if (response.text) {
-        const mapping = JSON.parse(response.text.trim());
-        const newResolutions = { ...resolutions, ...mapping };
-        setResolutions(newResolutions);
-        localStorage.setItem('aims_name_resolutions', JSON.stringify(newResolutions));
-        alert("AI Matching completed successfully!");
+        if (response.text) {
+          const mapping = JSON.parse(response.text.trim());
+          Object.entries(mapping).forEach(([rawName, canonicalName]) => {
+            if (!rawName) return;
+            const normalized = String(canonicalName).trim();
+            if (normalized && normalized !== rawName) {
+              allChanged[rawName] = normalized;
+            }
+          });
+        }
+      }
+
+      if (Object.keys(allChanged).length === 0) {
+        setAIProposals(null);
+        alert('AI completed matching and found no changed mappings.');
+      } else {
+        setAIOfficialNames(officialNames);
+        setAIProposals(allChanged);
+        setIsAIConfirmationOpen(true);
       }
     } catch (error: any) {
       console.error(error);
@@ -179,6 +292,77 @@ export default function App() {
     } finally {
       setIsMatchingAI(false);
     }
+  };
+
+  const handleLogicMatch = () => {
+    const nameList = localStorage.getItem('aims_ai_name_list') || defaultNameList;
+    const officialNames = Array.from(
+      new Set([
+        ...nameList.split(',').map(name => name.trim()).filter(Boolean),
+        ...Object.values(resolutions),
+        ...rawNames
+      ])
+    ).sort((a, b) => a.localeCompare(b));
+
+    const changedMatches: Record<string, string> = {};
+
+    rawNames.forEach(rawName => {
+      const currentCanonical = resolutions[rawName] || rawName;
+      const guess = guessLogicMatch(rawName, officialNames);
+      if (guess && guess !== currentCanonical) {
+        changedMatches[rawName] = guess;
+      }
+    });
+
+    if (Object.keys(changedMatches).length === 0) {
+      alert('Logic matching found no changed mappings.');
+      return;
+    }
+
+    setAIOfficialNames(officialNames);
+    setAIProposals(changedMatches);
+    setIsAIConfirmationOpen(true);
+  };
+
+  const handleFixWithAttendance = () => {
+    const nameList = localStorage.getItem('aims_ai_name_list') || defaultNameList;
+    if (!nameList.trim()) {
+      alert('Please configure the attendance sheet names in AI settings first.');
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    const officialNames = nameList.split(',').map(name => name.trim()).filter(Boolean);
+    if (officialNames.length === 0) {
+      alert('No names found in attendance sheet. Please add names in AI settings.');
+      setIsSettingsOpen(true);
+      return;
+    }
+
+    setAIOfficialNames(officialNames);
+    setIsAttendanceMatcherOpen(true);
+  };
+
+  const handleConfirmAIMapping = (updatedMappings: Record<string, string>) => {
+    const combinedResolutions = { ...resolutions, ...updatedMappings };
+    setResolutions(combinedResolutions);
+    localStorage.setItem('aims_name_resolutions', JSON.stringify(combinedResolutions));
+    setAIProposals(null);
+    setIsAIConfirmationOpen(false);
+    alert('AI matches confirmed. You can continue reviewing or merge manually.');
+  };
+
+  const handleCancelAIMapping = () => {
+    setAIProposals(null);
+    setIsAIConfirmationOpen(false);
+  };
+
+  const handleAttendanceMatcherConfirm = (newResolutions: Record<string, string>) => {
+    const combinedResolutions = { ...resolutions, ...newResolutions };
+    setResolutions(combinedResolutions);
+    localStorage.setItem('aims_name_resolutions', JSON.stringify(combinedResolutions));
+    setIsAttendanceMatcherOpen(false);
+    alert(`Successfully matched ${Object.keys(newResolutions).length} names with attendance sheet.`);
   };
 
   const readExcelFile = (file: File): Promise<RawRecord[]> => {
@@ -376,7 +560,7 @@ export default function App() {
 
         {step === 'manual_merge' && (
           <div className="space-y-4 max-w-4xl mx-auto">
-            <div className="flex justify-end px-6">
+            <div className="flex flex-wrap justify-end gap-3 px-6">
               <button
                 onClick={handleAIMatch}
                 disabled={isMatchingAI}
@@ -390,6 +574,22 @@ export default function App() {
                     Auto-Match with AI
                   </>
                 )}
+              </button>
+              <button
+                onClick={handleLogicMatch}
+                disabled={isMatchingAI}
+                className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:bg-yellow-300 transition-colors font-medium shadow-sm"
+              >
+                <Zap className="w-4 h-4" />
+                Logic Match
+              </button>
+              <button
+                onClick={handleFixWithAttendance}
+                disabled={isMatchingAI}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-green-400 transition-colors font-medium shadow-sm"
+              >
+                <FileText className="w-4 h-4" />
+                Fix with Attendance
               </button>
             </div>
             <ManualMerge 
@@ -412,9 +612,28 @@ export default function App() {
         )}
       </main>
 
+      {aiProposals && (
+        <AIConfirmation
+          isOpen={isAIConfirmationOpen}
+          proposedResolutions={aiProposals}
+          officialNames={aiOfficialNames}
+          onClose={handleCancelAIMapping}
+          onConfirm={handleConfirmAIMapping}
+        />
+      )}
+
       <AISettings 
         isOpen={isSettingsOpen} 
         onClose={() => setIsSettingsOpen(false)} 
+      />
+
+      <AttendanceMatcher
+        isOpen={isAttendanceMatcherOpen}
+        onClose={() => setIsAttendanceMatcherOpen(false)}
+        rawNames={rawNames}
+        attendanceNames={aiOfficialNames}
+        currentResolutions={resolutions}
+        onConfirm={handleAttendanceMatcherConfirm}
       />
     </div>
   );

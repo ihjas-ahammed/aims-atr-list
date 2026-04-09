@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Search, Merge, ArrowRight, CheckSquare, Square } from 'lucide-react';
 
 interface ManualMergeProps {
@@ -12,6 +12,10 @@ export function ManualMerge({ rawNames, initialResolutions, onComplete }: Manual
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [primaryChoice, setPrimaryChoice] = useState<string>('');
+
+  React.useEffect(() => {
+    setResolutions(initialResolutions);
+  }, [initialResolutions]);
 
   const availableNames = useMemo(() => {
     const canonicals = new Set<string>();
